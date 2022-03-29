@@ -1,0 +1,315 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Strategies in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public class JordanTrendStrategy : Strategy
+	{
+		
+		ninZaSuperiorADXDMI adxdmi;
+		ninZaSuperiorADXDMI adxdmihigher;
+		
+		private EMA smaFast;
+		private EMA smaSlow;
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description									= @"Custom ADX and DMI strategy for Jordan ";
+				Name										= "JordanTrendStrategy";
+				Calculate									= Calculate.OnBarClose;
+				EntriesPerDirection							= 1;
+				EntryHandling								= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy				= true;
+				ExitOnSessionCloseSeconds					= 30;
+				IsFillLimitOnTouch							= false;
+				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution							= OrderFillResolution.Standard;
+				Slippage									= 0;
+				StartBehavior								= StartBehavior.WaitUntilFlat;
+				TimeInForce									= TimeInForce.Gtc;
+				TraceOrders									= false;
+				RealtimeErrorHandling						= RealtimeErrorHandling.StopCancelClose;
+				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade							= 20;
+				// Disable this property for performance gains in Strategy Analyzer optimizations
+				// See the Help Guide for additional information
+				IsInstantiatedOnEachOptimizationIteration	= true;
+				
+				// ADX Periods
+				PrimaryADXPeriod							= 14;
+				SecondaryADXPeriod							= 14;
+				AdxThreshold								= 20;
+				
+				// DMA Periods
+				PrimaryDMIPeriod							= 14;
+				SecondaryDMIPeriod							= 14;
+				
+				// Secondary Data Series
+				SecondaryDataSeries							= 10;
+				
+				
+				// Moving Averages
+				Fast										= 8;
+				Slow										= 13;
+				
+				// Trade Management
+				StopTicks									= 25;
+				NumberOfContracts							= 1;
+				
+			}
+			else if (State == State.Configure)
+			{
+				 AddDataSeries(BarsPeriodType.Minute, SecondaryDataSeries);	
+				 SetStopLoss(CalculationMode.Ticks, StopTicks);
+			}
+			else if  (State == State.DataLoaded)
+			{
+				adxdmi = ninZaSuperiorADXDMI(BarsArray[0], PrimaryADXPeriod, false, ninZa_MAType.HMA, 2, false, ninZa_MAType.EMA, PrimaryDMIPeriod, PrimaryDMIPeriod, 80, 20);
+				adxdmihigher = ninZaSuperiorADXDMI(BarsArray[1], SecondaryADXPeriod, false, ninZa_MAType.HMA, 2, false, ninZa_MAType.EMA, SecondaryDMIPeriod, SecondaryDMIPeriod, 80, 20);
+				
+				smaFast = EMA(Fast);
+				smaSlow = EMA(Slow);
+
+				AddChartIndicator(smaFast);
+				AddChartIndicator(smaSlow);
+			}
+		}
+		
+			// *****************************************************************
+		// Analysis to determine the signal given by the primary data series
+		
+		//ninZaSuperiorADXDMI(BarsArray[0], PrimaryDMIPeriod, true, HMA, 2, true, EMA, 2, 2, 80, 20)[1]
+		
+		protected bool adxTrend() 
+		{
+			if (ADX(BarsArray[0], PrimaryADXPeriod)[0] > AdxThreshold) 
+			{
+				return true;
+			}
+			else 
+			{
+				return false;
+			}
+			
+		}
+		
+		protected MarketPosition dmiBias() 
+		{
+			if (adxdmi.DMIPlus[0] > adxdmi.DMIMinus[0])
+			{
+				return MarketPosition.Long;
+			}
+			else if (adxdmi.DMIMinus[0] > adxdmi.DMIPlus[0])
+			{
+				return MarketPosition.Short;
+			}
+			else
+			{
+				return MarketPosition.Flat;
+			}
+		}
+		
+		protected MarketPosition primarySignal() {
+			MarketPosition primaryDmiBias = dmiBias();
+			bool primaryAdxTrend = adxTrend();
+			
+			if (primaryDmiBias == MarketPosition.Long && primaryAdxTrend == true)
+			{
+				return MarketPosition.Long;
+			}
+			else if (primaryDmiBias == MarketPosition.Short && primaryAdxTrend == true)
+			{
+				return MarketPosition.Short;
+			}
+			else
+			{
+				return MarketPosition.Flat;
+			}
+		}
+		
+		// *****************************************************************
+		
+		
+		
+		// Functions to get the data from the secondary data series
+		// *******************************************************
+		
+		// Returns a boolean that determines if the ADX has suitable conditions for an entry or not
+		protected bool secondaryAdxSingal() 
+		{
+			if (ADX(BarsArray[1], SecondaryADXPeriod)[0] > 20) 
+			{
+				return true;
+			}
+			else 
+			{
+				return false;
+			}
+		}
+		
+		// Returns a MarketPosition (L,S,F) based on the DMI reading for the secondary data series
+		protected MarketPosition secondaryDmiSingal() 
+		{
+			if (adxdmihigher.DMIPlus[0] > adxdmihigher.DMIMinus[0])
+			{
+				return MarketPosition.Long;
+			}
+			else if (adxdmihigher.DMIMinus[0] > adxdmihigher.DMIPlus[0])
+			{
+				return MarketPosition.Short;
+			}
+			else
+			{
+				return MarketPosition.Flat;
+			}
+		}
+		
+		// Returns a MarketPosition based on the aggregated data from the second data series
+		protected MarketPosition secondarySignal() 
+		{
+			MarketPosition secondaryDmiBias = secondaryDmiSingal();
+			bool secondaryAdxTrend = secondaryAdxSingal();
+			
+			if (secondaryDmiBias == MarketPosition.Long && secondaryAdxTrend == true)
+			{
+				return MarketPosition.Long;
+			}
+			else if (secondaryDmiBias == MarketPosition.Short && secondaryAdxTrend == true)
+			{
+				return MarketPosition.Short;
+			}
+			else 
+			{
+				return MarketPosition.Flat;
+			}
+		}
+		//*******************************************//
+		
+		
+
+		protected override void OnBarUpdate()
+		{
+		
+			// Make sure we have the data needed to complete our data analysis
+			if (CurrentBars[0] <= BarsRequiredToPlot || CurrentBars[1] <= BarsRequiredToPlot)
+        		return;
+			
+			// Get the signal from the primary data series
+			MarketPosition primaryDataSignal = primarySignal();
+			
+			// Get the singal from the secondary data series
+			MarketPosition secondaryDataSignal = secondarySignal();
+			
+			
+			// Compute what biases align
+			if (primaryDataSignal == MarketPosition.Long && secondaryDataSignal == MarketPosition.Long && Position.MarketPosition == MarketPosition.Flat) 
+			{
+				EnterLong(NumberOfContracts);
+			}
+			else if (primaryDataSignal == MarketPosition.Short && secondaryDataSignal == MarketPosition.Short && Position.MarketPosition == MarketPosition.Flat)
+			{
+				EnterShort(NumberOfContracts);
+			}
+			
+			
+			
+			// Code for position management
+			if (CrossAbove(smaFast, smaSlow, 1) && Position.MarketPosition == MarketPosition.Short)
+			{
+				ExitShort();
+			}
+			else if (CrossBelow(smaFast, smaSlow, 1) && Position.MarketPosition == MarketPosition.Short)
+			{
+				ExitLong();
+			} 
+			
+		}
+		
+		
+			#region Properties
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="Second Data Series (Minutes)", Description="Second Data Series Timeframe", Order=1, GroupName="Data Series")]
+		public int SecondaryDataSeries
+		{ get; set; }
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="Primary ADX Period", Description="Primary ADX Period", Order=1, GroupName="ADX")]
+		public int PrimaryADXPeriod
+		{ get; set; }
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="Secondary ADX Period", Description="Secondary ADX Period", Order=2, GroupName="ADX")]
+		public int SecondaryADXPeriod
+		{ get; set; }
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="ADX Trigger", Description="ADX Trigger Level", Order=3, GroupName="ADX")]
+		public int AdxThreshold
+		{ get; set; }
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="Primary DMI Period", Description="Primary DMI Period", Order=1, GroupName="DMI")]
+		public int PrimaryDMIPeriod
+		{ get; set; }
+		
+		[Range(1, int.MaxValue)]
+		[NinjaScriptProperty]
+		[Display(Name="Secondary DMI Period", Description="Secondary DMI Period", Order=2, GroupName="DMI")]
+		public int SecondaryDMIPeriod
+		{ get; set; }
+		
+		[Range(1, int.MaxValue), NinjaScriptProperty]
+		[Display(ResourceType = typeof(Custom.Resource), Name = "Fast", GroupName = "Moving Averages", Order = 0)]
+		public int Fast
+		{ get; set; }
+
+		[Range(1, int.MaxValue), NinjaScriptProperty]
+		[Display(ResourceType = typeof(Custom.Resource), Name = "Slow", GroupName = "MovingAverages", Order = 1)]
+		public int Slow
+		{ get; set; }
+		
+		[Range(1, int.MaxValue), NinjaScriptProperty]
+		[Display(ResourceType = typeof(Custom.Resource), Name = "Stop Ticks", GroupName = "Trade Management", Order = 1)]
+		public int StopTicks
+		{ get; set; }
+		
+		[Range(1, int.MaxValue), NinjaScriptProperty]
+		[Display(ResourceType = typeof(Custom.Resource), Name = "Number of Contracts", GroupName = "Trade Management", Order = 1)]
+		public int NumberOfContracts
+		{ get; set; }
+		
+		#endregion
+	}
+	
+	
+}
